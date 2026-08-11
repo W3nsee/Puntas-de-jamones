@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acumulador de Puntas de Jamón</title>
+    <!-- Librerías importadas directamente de internet -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: #f4f7f6; 
+            color: #333;
+            padding: 20px;
+        }
+        .container { 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 10px; 
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1); 
+            text-align: center;
+        }
+        h1 { font-size: 24px; color: #d32f2f; }
+        input[type="file"] { margin: 20px 0; }
+        button { 
+            padding: 12px 24px; 
+            margin: 10px; 
+            cursor: pointer; 
+            background-color: #4CAF50; 
+            color: white; 
+            border: none; 
+            border-radius: 5px;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        button:hover { background-color: #45a049; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 25px; 
+        }
+        th, td { 
+            border: 1px solid #ddd; 
+            padding: 12px; 
+            text-align: left; 
+        }
+        th { background-color: #f8f9fa; font-weight: bold; }
+        #status { font-weight: bold; color: #555; margin-top: 15px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>🍖 Acumulador de Puntas de Jamón</h1>
+        <p>Sube la fotografía de la lista para leer los pesos y generar el archivo Excel.</p>
+        
+        <input type="file" id="imageInput" accept="image/*">
+        <br>
+        <button id="processBtn" onclick="processImage()">Procesar Fotografía</button>
+        
+        <p id="status"></p>
+
+        <table id="resultTable" style="display:none;">
+            <thead>
+                <tr>
+                    <th>CÓDIGO</th>
+                    <th>JAMÓN</th>
+                    <th>PESO TOTAL</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+        
+        <br>
+        <button id="downloadBtn" style="display:none;" onclick="downloadExcel()">📥 Descargar Excel</button>
+    </div>
+
+    <script>
+        // 1. Catálogo oficial basado en tu archivo Excel
+        const catalog = [
+            { codigo: 502, nombre: "LONCHI" },
+            { codigo: 503, nombre: "AHUMADO NAYAR" },
+            { codigo: 504, nombre: "CAMPIRANO" },
+            { codigo: 506, nombre: "JAMON PAVO SABROSO" },
+            { codigo: 507, nombre: "PIERNA NAYAR" },
+            { codigo: 508, nombre: "PIERNA AMERICANA" },
+            { codigo: 509, nombre: "PIERNA NATURAL" },
+            { codigo: 510, nombre: "JAMON NAYAR VIRGINIA" },
+            { codigo: 512, nombre: "VIRGINIA DELICIA" }
+        ];
+
+        // 2. Configuración del "filtro" para corregir nombres mal escritos
+        const fuse = new Fuse(catalog, { keys: ["nombre"], threshold: 0.4 });
+        let finalData = [];
+
+        async function processImage() {
+            const fileInput = document.getElementById('imageInput');
+            const status = document.getElementById('status');
+            const btn = document.getElementById('processBtn');
+
+            if (!fileInput.files.length) {
+                alert("Por favor selecciona una foto de tu computadora o celular.");
+                return;
+            }
+
+            btn.disabled = true;
+            status.innerText = "⏳ Analizando texto en la foto (esto puede tardar unos segundos)...";
+
+            try {
+                const file = fileInput.files[0];
+                // Llama al motor de OCR en español
+                const { data: { text } } = await Tesseract.recognize(file, 'spa');
+                
+                status.innerText = "🔍 Filtrando nombres y sumando los pesos...";
+                analyzeText(text);
+            } catch (error) {
+                status.innerText = "❌ Hubo un error al procesar la foto.";
+                console.error(error);
+            }
+            btn.disabled = false;
+        }
+
+        function analyzeText(text) {
+            const lines = text.split('\n');
+            let accumulators = {};
+
+            lines.forEach(line => {
+                // Busca una estructura de Texto + Número en el renglón
+                const match = line.match(/([a-zA-Z\s]+)[\s:]+([0-9]*\.?[0-9]+)/);
+                if (match) {
+                    const rawName = match[1].trim();
+                    const weight = parseFloat(match[2]);
+
+                    // Pasa el texto por el filtro para encontrar el jamón correcto
+                    const searchResult = fuse.search(rawName);
+                    if (searchResult.length > 0) {
+                        const foundItem = searchResult[0].item;
+                        const key = foundItem.codigo;
+                        
+                        // Si no existe en el acumulado, lo crea. Si existe, lo suma.
+                        if (!accumulators[key]) {
+                            accumulators[key] = { codigo: foundItem.codigo, nombre: foundItem.nombre, peso: 0 };
+                        }
+                        accumulators[key].peso += weight;
+                    }
+                }
+            });
+
+            finalData = Object.values(accumulators);
+            displayTable();
+        }
+
+        function displayTable() {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = "";
+            const table = document.getElementById('resultTable');
+            const downloadBtn = document.getElementById('downloadBtn');
+            const status = document.getElementById('status');
+
+            if (finalData.length === 0) {
+                status.innerText = "⚠️ No se detectaron productos o pesos en la imagen. Intenta con una foto más clara o mejor iluminada.";
+                table.style.display = 'none';
+                downloadBtn.style.display = 'none';
+                return;
+            }
+
+            finalData.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${row.codigo}</td><td>${row.nombre}</td><td>${row.peso.toFixed(3)} KG</td>`;
+                tbody.appendChild(tr);
+            });
+
+            status.innerText = "✅ ¡Acumulado generado con éxito!";
+            table.style.display = 'table';
+            downloadBtn.style.display = 'inline-block';
+        }
+
+        function downloadExcel() {
+            // Convierte los datos acumulados a tu formato original de Excel
+            const worksheet = XLSX.utils.json_to_sheet(finalData.map(item => ({
+                "CODIGO": item.codigo,
+                "JAMON": item.nombre,
+                "PESO TOTAL": item.peso
+            })));
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Hoja1"); // Mismo nombre que en tu Excel
+            
+            // Descarga el archivo
+            XLSX.writeFile(workbook, "SALIDA PUNTAS JAMON_ACUMULADO.xlsx");
+        }
+    </script>
+</body>
+</html>
