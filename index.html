@@ -26,7 +26,8 @@
             text-align: center;
         }
         h1 { font-size: 24px; color: #d32f2f; }
-        input[type="file"] { margin: 20px 0; }
+        /* El input ahora permite selección múltiple */
+        input[type="file"] { margin: 20px 0; border: 1px dashed #ccc; padding: 10px; width: 90%; }
         button { 
             padding: 12px 24px; 
             margin: 10px; 
@@ -52,17 +53,19 @@
         }
         th { background-color: #f8f9fa; font-weight: bold; }
         #status { font-weight: bold; color: #555; margin-top: 15px; }
+        .progress { color: #1976d2; }
     </style>
 </head>
 <body>
 
     <div class="container">
         <h1>🍖 Acumulador de Puntas de Jamón</h1>
-        <p>Sube la fotografía de la lista para leer los pesos y generar el archivo Excel.</p>
+        <p>Selecciona todas las fotografías de tus hojas para generar el acumulado total.</p>
         
-        <input type="file" id="imageInput" accept="image/*">
+        <!-- El atributo "multiple" permite seleccionar varios archivos -->
+        <input type="file" id="imageInput" accept="image/*" multiple>
         <br>
-        <button id="processBtn" onclick="processImage()">Procesar Fotografía</button>
+        <button id="processBtn" onclick="processImages()">Procesar Fotografías</button>
         
         <p id="status"></p>
 
@@ -82,7 +85,7 @@
     </div>
 
     <script>
-        // 1. Catálogo oficial basado en tu archivo Excel
+        // Catálogo oficial 
         const catalog = [
             { codigo: 502, nombre: "LONCHI" },
             { codigo: 503, nombre: "AHUMADO NAYAR" },
@@ -95,65 +98,73 @@
             { codigo: 512, nombre: "VIRGINIA DELICIA" }
         ];
 
-        // 2. Configuración del "filtro" para corregir nombres mal escritos
         const fuse = new Fuse(catalog, { keys: ["nombre"], threshold: 0.4 });
         let finalData = [];
 
-        async function processImage() {
+        async function processImages() {
             const fileInput = document.getElementById('imageInput');
             const status = document.getElementById('status');
             const btn = document.getElementById('processBtn');
 
             if (!fileInput.files.length) {
-                alert("Por favor selecciona una foto de tu computadora o celular.");
+                alert("Por favor selecciona al menos una foto.");
                 return;
             }
 
             btn.disabled = true;
-            status.innerText = "⏳ Analizando texto en la foto (esto puede tardar unos segundos)...";
+            
+            // Objeto para llevar la suma de todas las imágenes juntas
+            let globalAccumulators = {};
+            const totalFiles = fileInput.files.length;
 
-            try {
-                const file = fileInput.files[0];
-                // Llama al motor de OCR en español
-                const { data: { text } } = await Tesseract.recognize(file, 'spa');
+            // Procesar cada imagen una por una
+            for (let i = 0; i < totalFiles; i++) {
+                status.innerHTML = `<span class="progress">⏳ Analizando foto ${i + 1} de ${totalFiles}... (esto puede tardar unos segundos)</span>`;
                 
-                status.innerText = "🔍 Filtrando nombres y sumando los pesos...";
-                analyzeText(text);
-            } catch (error) {
-                status.innerText = "❌ Hubo un error al procesar la foto.";
-                console.error(error);
+                try {
+                    const file = fileInput.files[i];
+                    const { data: { text } } = await Tesseract.recognize(file, 'spa');
+                    
+                    // Sumamos lo encontrado en esta foto al acumulado global
+                    globalAccumulators = analyzeText(text, globalAccumulators);
+                } catch (error) {
+                    console.error(`Error al procesar la foto ${i + 1}:`, error);
+                    alert(`Hubo un problema leyendo la foto número ${i + 1}. El sistema continuará con las demás.`);
+                }
             }
+
+            status.innerText = "🔍 Finalizando sumas y preparando la tabla...";
+            
+            // Convertir el objeto de sumas en una lista final para la tabla
+            finalData = Object.values(globalAccumulators);
+            displayTable();
+            
             btn.disabled = false;
         }
 
-        function analyzeText(text) {
+        function analyzeText(text, currentAccumulators) {
             const lines = text.split('\n');
-            let accumulators = {};
-
+            
             lines.forEach(line => {
-                // Busca una estructura de Texto + Número en el renglón
                 const match = line.match(/([a-zA-Z\s]+)[\s:]+([0-9]*\.?[0-9]+)/);
                 if (match) {
                     const rawName = match[1].trim();
                     const weight = parseFloat(match[2]);
 
-                    // Pasa el texto por el filtro para encontrar el jamón correcto
                     const searchResult = fuse.search(rawName);
                     if (searchResult.length > 0) {
                         const foundItem = searchResult[0].item;
                         const key = foundItem.codigo;
                         
-                        // Si no existe en el acumulado, lo crea. Si existe, lo suma.
-                        if (!accumulators[key]) {
-                            accumulators[key] = { codigo: foundItem.codigo, nombre: foundItem.nombre, peso: 0 };
+                        if (!currentAccumulators[key]) {
+                            currentAccumulators[key] = { codigo: foundItem.codigo, nombre: foundItem.nombre, peso: 0 };
                         }
-                        accumulators[key].peso += weight;
+                        currentAccumulators[key].peso += weight;
                     }
                 }
             });
-
-            finalData = Object.values(accumulators);
-            displayTable();
+            
+            return currentAccumulators;
         }
 
         function displayTable() {
@@ -164,7 +175,7 @@
             const status = document.getElementById('status');
 
             if (finalData.length === 0) {
-                status.innerText = "⚠️ No se detectaron productos o pesos en la imagen. Intenta con una foto más clara o mejor iluminada.";
+                status.innerText = "⚠️ No se detectaron productos o pesos en las imágenes. Revisa que las fotos sean nítidas.";
                 table.style.display = 'none';
                 downloadBtn.style.display = 'none';
                 return;
@@ -172,26 +183,25 @@
 
             finalData.forEach(row => {
                 const tr = document.createElement('tr');
+                // Se fija el peso a 3 decimales para mayor precisión como en tu Excel
                 tr.innerHTML = `<td>${row.codigo}</td><td>${row.nombre}</td><td>${row.peso.toFixed(3)} KG</td>`;
                 tbody.appendChild(tr);
             });
 
-            status.innerText = "✅ ¡Acumulado generado con éxito!";
+            status.innerText = "✅ ¡Acumulado total generado con éxito!";
             table.style.display = 'table';
             downloadBtn.style.display = 'inline-block';
         }
 
         function downloadExcel() {
-            // Convierte los datos acumulados a tu formato original de Excel
             const worksheet = XLSX.utils.json_to_sheet(finalData.map(item => ({
                 "CODIGO": item.codigo,
                 "JAMON": item.nombre,
-                "PESO TOTAL": item.peso
+                "PESO TOTAL": parseFloat(item.peso.toFixed(3))
             })));
             const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Hoja1"); // Mismo nombre que en tu Excel
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Hoja1");
             
-            // Descarga el archivo
             XLSX.writeFile(workbook, "SALIDA PUNTAS JAMON_ACUMULADO.xlsx");
         }
     </script>
