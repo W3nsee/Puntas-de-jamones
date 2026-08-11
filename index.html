@@ -26,7 +26,6 @@
             text-align: center;
         }
         h1 { font-size: 24px; color: #d32f2f; }
-        /* El input ahora permite selección múltiple */
         input[type="file"] { margin: 20px 0; border: 1px dashed #ccc; padding: 10px; width: 90%; }
         button { 
             padding: 12px 24px; 
@@ -62,7 +61,6 @@
         <h1>🍖 Acumulador de Puntas de Jamón</h1>
         <p>Selecciona todas las fotografías de tus hojas para generar el acumulado total.</p>
         
-        <!-- El atributo "multiple" permite seleccionar varios archivos -->
         <input type="file" id="imageInput" accept="image/*" multiple>
         <br>
         <button id="processBtn" onclick="processImages()">Procesar Fotografías</button>
@@ -85,20 +83,24 @@
     </div>
 
     <script>
-        // Catálogo oficial 
+        // Catálogo oficial con diccionario de alias extraídos de las notas a mano
         const catalog = [
-            { codigo: 502, nombre: "LONCHI" },
-            { codigo: 503, nombre: "AHUMADO NAYAR" },
-            { codigo: 504, nombre: "CAMPIRANO" },
-            { codigo: 506, nombre: "JAMON PAVO SABROSO" },
-            { codigo: 507, nombre: "PIERNA NAYAR" },
-            { codigo: 508, nombre: "PIERNA AMERICANA" },
-            { codigo: 509, nombre: "PIERNA NATURAL" },
-            { codigo: 510, nombre: "JAMON NAYAR VIRGINIA" },
-            { codigo: 512, nombre: "VIRGINIA DELICIA" }
+            { codigo: 502, nombre: "LONCHI", alias: ["lonchi", "lonch", "lonchi mexicano", "lonchi pavo"] },
+            { codigo: 503, nombre: "AHUMADO NAYAR", alias: ["ahumado nayar", "ahumado"] },
+            { codigo: 504, nombre: "CAMPIRANO", alias: ["campirano", "campivono", "camp"] },
+            { codigo: 506, nombre: "JAMON PAVO SABROSO", alias: ["sabroso", "pavo sabroso", "jamon pavo sabroso"] },
+            { codigo: 507, nombre: "PIERNA NAYAR", alias: ["pierna nayar", "nayar pierna"] },
+            { codigo: 508, nombre: "PIERNA AMERICANA", alias: ["pierna americana", "americana", "pierna americana mex", "pierna americ mex", "pierna amer mex", "pierna amencana mex"] },
+            { codigo: 509, nombre: "PIERNA NATURAL", alias: ["pierna natural", "natural", "pierna natural mex", "pierna natu mex", "pierna nat mex"] },
+            { codigo: 510, nombre: "JAMON NAYAR VIRGINIA", alias: ["nayar virginia", "virginia nayar", "pavo nayar", "nayar pavo"] },
+            { codigo: 512, nombre: "VIRGINIA DELICIA", alias: ["virginia delicia", "delicia"] },
+            { codigo: 513, nombre: "PAVO BAFAR", alias: ["pavo bafar", "virginia bafar", "bafar pavo", "bafar virginia", "virginia", "virginia pavo", "bafar virginia pavo"] }, 
+            { codigo: 514, nombre: "VIRGINIA SABORI", alias: ["virginia sabori", "sabori virginia", "sabori"] },
+            { codigo: 515, nombre: "PIERNA BAFAR", alias: ["pierna bafar", "bafar pierna"] },
+            { codigo: 516, nombre: "PECHUGA BAFAR", alias: ["pechuga bafar", "bafar pechuga", "pechuga"] }
         ];
 
-        const fuse = new Fuse(catalog, { keys: ["nombre"], threshold: 0.4 });
+        const fuse = new Fuse(catalog, { keys: ["nombre", "alias"], threshold: 0.4 });
         let finalData = [];
 
         async function processImages() {
@@ -112,20 +114,15 @@
             }
 
             btn.disabled = true;
-            
-            // Objeto para llevar la suma de todas las imágenes juntas
             let globalAccumulators = {};
             const totalFiles = fileInput.files.length;
 
-            // Procesar cada imagen una por una
             for (let i = 0; i < totalFiles; i++) {
                 status.innerHTML = `<span class="progress">⏳ Analizando foto ${i + 1} de ${totalFiles}... (esto puede tardar unos segundos)</span>`;
                 
                 try {
                     const file = fileInput.files[i];
                     const { data: { text } } = await Tesseract.recognize(file, 'spa');
-                    
-                    // Sumamos lo encontrado en esta foto al acumulado global
                     globalAccumulators = analyzeText(text, globalAccumulators);
                 } catch (error) {
                     console.error(`Error al procesar la foto ${i + 1}:`, error);
@@ -134,11 +131,8 @@
             }
 
             status.innerText = "🔍 Finalizando sumas y preparando la tabla...";
-            
-            // Convertir el objeto de sumas en una lista final para la tabla
             finalData = Object.values(globalAccumulators);
             displayTable();
-            
             btn.disabled = false;
         }
 
@@ -146,13 +140,22 @@
             const lines = text.split('\n');
             
             lines.forEach(line => {
+                // Busca letras, espacios y luego números que pueden empezar con punto (ej. .030)
                 const match = line.match(/([a-zA-Z\s]+)[\s:]+([0-9]*\.?[0-9]+)/);
                 if (match) {
                     const rawName = match[1].trim();
-                    const weight = parseFloat(match[2]);
+                    let weightStr = match[2];
+                    
+                    // Si Tesseract lee algo como ".030" sin el cero antes, lo ajustamos
+                    if (weightStr.startsWith('.')) {
+                        weightStr = '0' + weightStr;
+                    }
+                    
+                    const weight = parseFloat(weightStr);
 
                     const searchResult = fuse.search(rawName);
-                    if (searchResult.length > 0) {
+                    // Aseguramos que la coincidencia sea aceptable y el peso válido
+                    if (searchResult.length > 0 && !isNaN(weight)) {
                         const foundItem = searchResult[0].item;
                         const key = foundItem.codigo;
                         
@@ -183,7 +186,6 @@
 
             finalData.forEach(row => {
                 const tr = document.createElement('tr');
-                // Se fija el peso a 3 decimales para mayor precisión como en tu Excel
                 tr.innerHTML = `<td>${row.codigo}</td><td>${row.nombre}</td><td>${row.peso.toFixed(3)} KG</td>`;
                 tbody.appendChild(tr);
             });
