@@ -17,7 +17,7 @@
             padding: 20px;
         }
         .container { 
-            max-width: 600px; 
+            max-width: 700px; 
             margin: 0 auto; 
             background: white; 
             padding: 30px; 
@@ -40,19 +40,20 @@
         }
         button:hover { background-color: #45a049; }
         button:disabled { background-color: #cccccc; cursor: not-allowed; }
-        table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin-top: 25px; 
-        }
-        th, td { 
-            border: 1px solid #ddd; 
-            padding: 12px; 
-            text-align: left; 
-        }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; margin-bottom: 30px;}
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; font-size: 14px;}
         th { background-color: #f8f9fa; font-weight: bold; }
-        #status { font-weight: bold; color: #555; margin-top: 15px; }
+        
+        #status { font-weight: bold; color: #555; margin-top: 15px; margin-bottom: 20px;}
         .progress { color: #1976d2; }
+        
+        /* Estilos para la sección de verificación por hoja */
+        .sheet-container { background-color: #fafafa; border: 1px solid #eee; padding: 15px; margin-bottom: 20px; border-radius: 8px; text-align: left;}
+        .sheet-container h3 { margin-top: 0; color: #00796b; font-size: 18px; border-bottom: 2px solid #00796b; padding-bottom: 5px;}
+        .raw-text { color: #7f8c8d; font-style: italic; font-size: 12px;}
+        
+        .section-title { background-color: #333; color: white; padding: 10px; border-radius: 5px; margin-top: 40px;}
     </style>
 </head>
 <body>
@@ -67,11 +68,16 @@
         
         <p id="status"></p>
 
+        <!-- Contenedor donde aparecerá el desglose por foto para verificar -->
+        <div id="detailsContainer"></div>
+
+        <!-- Tabla final del Acumulado Total -->
+        <h2 id="titleTotal" class="section-title" style="display:none;">📊 Acumulado Total (Para Excel)</h2>
         <table id="resultTable" style="display:none;">
             <thead>
                 <tr>
                     <th>CÓDIGO</th>
-                    <th>JAMÓN</th>
+                    <th>JAMÓN OFICIAL</th>
                     <th>PESO TOTAL</th>
                 </tr>
             </thead>
@@ -79,11 +85,11 @@
         </table>
         
         <br>
-        <button id="downloadBtn" style="display:none;" onclick="downloadExcel()">📥 Descargar Excel</button>
+        <button id="downloadBtn" style="display:none;" onclick="downloadExcel()">📥 Descargar Excel de Acumulados</button>
     </div>
 
     <script>
-        // Catálogo oficial con diccionario de alias extraídos de las notas a mano
+        // Catálogo oficial con sinónimos
         const catalog = [
             { codigo: 502, nombre: "LONCHI", alias: ["lonchi", "lonch", "lonchi mexicano", "lonchi pavo"] },
             { codigo: 503, nombre: "AHUMADO NAYAR", alias: ["ahumado nayar", "ahumado"] },
@@ -101,7 +107,9 @@
         ];
 
         const fuse = new Fuse(catalog, { keys: ["nombre", "alias"], threshold: 0.4 });
-        let finalData = [];
+        
+        let finalData = []; // Para el Excel
+        let detailedSheetsData = []; // Para mostrar en pantalla hoja por hoja
 
         async function processImages() {
             const fileInput = document.getElementById('imageInput');
@@ -115,6 +123,7 @@
 
             btn.disabled = true;
             let globalAccumulators = {};
+            detailedSheetsData = []; // Reiniciamos los datos visuales
             const totalFiles = fileInput.files.length;
 
             for (let i = 0; i < totalFiles; i++) {
@@ -123,79 +132,136 @@
                 try {
                     const file = fileInput.files[i];
                     const { data: { text } } = await Tesseract.recognize(file, 'spa');
-                    globalAccumulators = analyzeText(text, globalAccumulators);
+                    
+                    // Extraemos los items de esta foto en particular
+                    const sheetItems = analyzeText(text);
+                    
+                    // Guardamos el detalle de esta hoja para mostrarlo en la web
+                    detailedSheetsData.push({
+                        fileName: file.name,
+                        index: i + 1,
+                        items: sheetItems
+                    });
+
+                    // Sumamos al acumulado global para el Excel
+                    sheetItems.forEach(item => {
+                        const key = item.codigo;
+                        if (!globalAccumulators[key]) {
+                            globalAccumulators[key] = { codigo: item.codigo, nombre: item.nombre, peso: 0 };
+                        }
+                        globalAccumulators[key].peso += item.peso;
+                    });
+
                 } catch (error) {
                     console.error(`Error al procesar la foto ${i + 1}:`, error);
                     alert(`Hubo un problema leyendo la foto número ${i + 1}. El sistema continuará con las demás.`);
                 }
             }
 
-            status.innerText = "🔍 Finalizando sumas y preparando la tabla...";
+            status.innerText = "🔍 Preparando vista de verificación...";
             finalData = Object.values(globalAccumulators);
-            displayTable();
+            displayTables();
             btn.disabled = false;
         }
 
-        function analyzeText(text, currentAccumulators) {
+        // Ahora esta función devuelve una lista de los productos encontrados en la hoja
+        function analyzeText(text) {
             const lines = text.split('\n');
+            let extractedItems = [];
             
             lines.forEach(line => {
-                // Busca letras, espacios y luego números que pueden empezar con punto (ej. .030)
                 const match = line.match(/([a-zA-Z\s]+)[\s:]+([0-9]*\.?[0-9]+)/);
                 if (match) {
                     const rawName = match[1].trim();
                     let weightStr = match[2];
                     
-                    // Si Tesseract lee algo como ".030" sin el cero antes, lo ajustamos
                     if (weightStr.startsWith('.')) {
                         weightStr = '0' + weightStr;
                     }
                     
                     const weight = parseFloat(weightStr);
-
                     const searchResult = fuse.search(rawName);
-                    // Aseguramos que la coincidencia sea aceptable y el peso válido
+                    
                     if (searchResult.length > 0 && !isNaN(weight)) {
                         const foundItem = searchResult[0].item;
-                        const key = foundItem.codigo;
-                        
-                        if (!currentAccumulators[key]) {
-                            currentAccumulators[key] = { codigo: foundItem.codigo, nombre: foundItem.nombre, peso: 0 };
-                        }
-                        currentAccumulators[key].peso += weight;
+                        extractedItems.push({
+                            rawText: rawName, // Guardamos cómo lo escribió la persona
+                            codigo: foundItem.codigo,
+                            nombre: foundItem.nombre,
+                            peso: weight
+                        });
                     }
                 }
             });
             
-            return currentAccumulators;
+            return extractedItems;
         }
 
-        function displayTable() {
-            const tbody = document.getElementById('tableBody');
-            tbody.innerHTML = "";
-            const table = document.getElementById('resultTable');
+        function displayTables() {
+            const detailsContainer = document.getElementById('detailsContainer');
+            const tbodyTotal = document.getElementById('tableBody');
+            const tableTotal = document.getElementById('resultTable');
+            const titleTotal = document.getElementById('titleTotal');
             const downloadBtn = document.getElementById('downloadBtn');
             const status = document.getElementById('status');
 
+            detailsContainer.innerHTML = "";
+            tbodyTotal.innerHTML = "";
+
             if (finalData.length === 0) {
                 status.innerText = "⚠️ No se detectaron productos o pesos en las imágenes. Revisa que las fotos sean nítidas.";
-                table.style.display = 'none';
+                tableTotal.style.display = 'none';
+                titleTotal.style.display = 'none';
                 downloadBtn.style.display = 'none';
                 return;
             }
 
-            finalData.forEach(row => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${row.codigo}</td><td>${row.nombre}</td><td>${row.peso.toFixed(3)} KG</td>`;
-                tbody.appendChild(tr);
+            // 1. DIBUJAR DETALLE POR HOJA (Para verificar)
+            detailedSheetsData.forEach(sheet => {
+                let sheetHtml = `<div class="sheet-container">`;
+                sheetHtml += `<h3>📄 Hoja ${sheet.index} <span style="font-size:12px; color:#666;">(${sheet.fileName})</span></h3>`;
+                
+                if(sheet.items.length === 0) {
+                    sheetHtml += `<p style="color:red; font-size:14px;">No se detectaron pesos válidos en esta foto.</p></div>`;
+                } else {
+                    sheetHtml += `<table>
+                        <thead>
+                            <tr>
+                                <th>Texto Leído en Foto</th>
+                                <th>Jamón Asignado</th>
+                                <th>Peso</th>
+                            </tr>
+                        </thead>
+                        <tbody>`;
+                    
+                    sheet.items.forEach(item => {
+                        sheetHtml += `<tr>
+                            <td><span class="raw-text">"${item.rawText}"</span></td>
+                            <td><strong>${item.nombre}</strong></td>
+                            <td>${item.peso.toFixed(3)} KG</td>
+                        </tr>`;
+                    });
+                    
+                    sheetHtml += `</tbody></table></div>`;
+                }
+                detailsContainer.innerHTML += sheetHtml;
             });
 
-            status.innerText = "✅ ¡Acumulado total generado con éxito!";
-            table.style.display = 'table';
+            // 2. DIBUJAR TABLA DE ACUMULADO TOTAL
+            finalData.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${row.codigo}</td><td><strong>${row.nombre}</strong></td><td>${row.peso.toFixed(3)} KG</td>`;
+                tbodyTotal.appendChild(tr);
+            });
+
+            status.innerText = "✅ ¡Análisis completado! Verifica tus hojas y descarga el acumulado.";
+            titleTotal.style.display = 'block';
+            tableTotal.style.display = 'table';
             downloadBtn.style.display = 'inline-block';
         }
 
         function downloadExcel() {
+            // Se usa finalData para que el Excel solo lleve los acumulados
             const worksheet = XLSX.utils.json_to_sheet(finalData.map(item => ({
                 "CODIGO": item.codigo,
                 "JAMON": item.nombre,
